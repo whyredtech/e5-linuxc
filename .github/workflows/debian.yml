@@ -1,0 +1,75 @@
+name: Build Debian Phosh image
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: linux-lts-e5 branch, tag or commit
+        default: e5-6.18
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  debian:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Enceka/linux-lts-e5
+          ref: ${{ inputs.kernel_ref }}
+          path: linux-lts-e5
+          fetch-depth: 128
+          persist-credentials: false
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lz4 e2fsprogs binutils python3 kmod
+      - name: Build kernel container
+        run: docker build -t e5-mainline-build upstream/
+      - name: Compile the release kernel and modules
+        env:
+          E5_RELEASE: '1'
+        run: bash upstream/build.sh
+      - name: Restore patched Debian packages
+        id: debs
+        uses: actions/cache@v4
+        with:
+          path: out/debs-patched
+          key: debs-patched-${{ runner.arch }}-${{ hashFiles('rootfs/build-patched-debs.sh', 'rootfs/deb-patches/**') }}
+      - name: Build patched Debian packages
+        if: steps.debs.outputs.cache-hit != 'true'
+        run: |
+          for pkg in network-manager modemmanager phosh gnome-control-center gnome-calls bluez; do
+            bash rootfs/build-patched-debs.sh "$pkg"
+          done
+      - name: Build the Debian + Phosh root image
+        env:
+          E5_MAINLINE: '1'
+          E5_IMG_MIB: '4096'
+          E5_ROOTFS_VOLUME: e5-debian-ci
+          E5_ROOTFS_OUT: out/debian-mainline/rootfs.ext4
+          E5_UPSTREAM_OUT: upstream/out-release
+        run: bash rootfs/build-rootfs-container.sh
+      - name: Compress and checksum
+        run: |
+          cd out/debian-mainline
+          sha256sum rootfs.ext4 | tee rootfs.ext4.sha256
+          cat ../../upstream/out-release/kernel.release | tee kernel.release
+          gzip -1 -k rootfs.ext4
+          ls -la
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: e5-debian-phosh-${{ github.run_id }}
+          path: |
+            out/debian-mainline/rootfs.ext4.gz
+            out/debian-mainline/rootfs.ext4.sha256
+            out/debian-mainline/kernel.release
+          compression-level: 0
+          retention-days: 7
