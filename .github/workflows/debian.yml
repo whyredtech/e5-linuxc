@@ -59,6 +59,7 @@ jobs:
       - name: Compress and checksum
         run: |
           cd out/debian-mainline
+          sudo chown -R $USER:$USER .
           sha256sum rootfs.ext4 | tee rootfs.ext4.sha256
           cat ../../upstream/out-release/kernel.release | tee kernel.release
           gzip -1 -k rootfs.ext4
